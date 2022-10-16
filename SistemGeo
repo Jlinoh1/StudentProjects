@@ -1,0 +1,147 @@
+//LINO HUAMAN JOSE LUIS
+//SISTEMA DE GEOLOCALIZACION UTILIZANDO LA RED GSM Y ARDUINO
+//SISTEMAS EMBEBIDOS UPAO 2022
+
+#define TINY_GSM_MODEM_SIM808
+#define TINY_GSM_USE_GPRS true
+#include <SoftwareSerial.h>
+#include <TinyGsmClient.h>
+#include <PubSubClient.h>
+#include <stdlib.h>
+
+SoftwareSerial SerialAT(10, 11);  // RX, TX
+TinyGsm        modem(SerialAT);
+TinyGsmClient espClient(modem);
+PubSubClient client(espClient);
+
+const char apn[]      = "claro.pe";
+const char gprsUser[] = "";
+const char gprsPass[] = "";
+const char* mqtt_server = "broker.mqtt-dashboard.com";
+char lati[12];
+char lont[13];
+long lastMsg = 0;
+char msg[70];
+float lat2      = 0;
+float lon2      = 0;
+  
+void setup() {
+  pinMode(LED_BUILTIN, OUTPUT);     // Initialize the BUILTIN_LED pin as an output
+  Serial.begin(115200);
+  SerialAT.begin(9600);
+  delay(6000);
+  Serial.println("Wait...");
+  Serial.println("Initializing modem...");
+  modem.restart();
+  String modemInfo = modem.getModemInfo();
+  Serial.print("Modem Info: ");
+  Serial.println(modemInfo);
+  
+
+#if TINY_GSM_USE_GPRS && defined TINY_GSM_MODEM_XBEE
+  modem.gprsConnect(apn, gprsUser, gprsPass);
+#endif
+
+  Serial.print("Waiting for network...");
+  if (!modem.waitForNetwork()) {
+    Serial.println(" fail");
+    delay(10000);
+    return;
+  }
+  Serial.println(" success");
+
+  if (modem.isNetworkConnected()) { Serial.println("Network connected"); }
+
+#if TINY_GSM_USE_GPRS
+  Serial.print(F("Connecting to "));
+  Serial.print(apn);
+  if (!modem.gprsConnect(apn, gprsUser, gprsPass)) {
+    Serial.println(" fail");
+    delay(10000);
+    return;
+  }
+  Serial.println(" success");
+
+  if (modem.isGprsConnected()) { Serial.println("GPRS connected"); }
+#endif
+  client.setServer(mqtt_server, 1883);
+  client.setCallback(callback);
+  modem.enableGPS();
+  delay(100);
+}
+
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  Serial.print("Message arrived [");
+  Serial.print(topic);
+  Serial.print("] ");
+  for (int i = 0; i < length; i++) {
+    Serial.print((char)payload[i]);
+  }
+  Serial.println();
+
+  // Switch on the LED if an 1 was received as first character
+  if ((char)payload[0] == '1') {
+    digitalWrite(LED_BUILTIN, LOW);   // Turn the LED on (Note that LOW is the voltage level
+    // but actually the LED is on; this is because
+    // it is acive low on the ESP-01)
+  } else {
+    digitalWrite(LED_BUILTIN, HIGH);  // Turn the LED off by making the voltage HIGH
+  }
+
+}
+
+void reconnect() {
+  // Loop until we're reconnected
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection...");
+    // Attempt to connect
+    if (client.connect("LB")) {
+      Serial.println("connected");
+      // Once connected, publish an announcement...
+      Serial.println("Enviando el primer mensaje");
+      // ... and resubscribe
+      client.subscribe("casa/despacho/luz");
+    } else {
+      Serial.print("failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" try again in 5 seconds");
+      // Wait 5 seconds before retrying
+      delay(5000);
+    }
+  }
+}
+
+void loop() {
+  if (!client.connected()) {
+    reconnect();
+  }
+  client.loop();
+  modem.getGPS(&lat2, &lon2);
+  delay(5);
+  long now = millis();
+  if (now - lastMsg > 1000) {
+    lastMsg = now;
+    delay(5);
+    dtostrf(lat2, -11, 8, lati);
+    delay(5);
+    dtostrf(lon2, -11, 8, lont);
+    //lati y lont SON AHORA STRINGS----------------------------------------
+    //snprintf(msg, 95, "Latitud: %s Longitud: %s", lati, lont);
+    if(lat2!=0.0 || lon2!=0.0){
+     Serial.print("Publish message LB/ubicacion/latitud: ");
+     Serial.println(lati);
+     client.publish("LB/ubicacion/latitud", lati);
+     delay(20);
+     Serial.print("Latitud: ");
+     Serial.println(lat2,8);
+    //-----------------------------------------------------------------------
+     Serial.print("Publish message LB/ubicacion/longitud: ");
+     Serial.println(lont);
+     client.publish("LB/ubicacion/longitud", lont);
+     delay(20);
+     Serial.print("Longitud: ");
+     Serial.println(lon2,8);
+    }
+  }
+}
